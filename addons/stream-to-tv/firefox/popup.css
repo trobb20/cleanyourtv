@@ -1,0 +1,15 @@
+:root { color-scheme: light dark; --accent: #1f9d4a; --muted: #777; }
+body { font: 13px/1.4 system-ui, sans-serif; width: 360px; margin: 12px; }
+h1 { font-size: 15px; margin: 0 0 8px; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 14px 0 6px; }
+.muted { color: var(--muted); }
+.error { color: #d33; }
+.ok { color: var(--accent); }
+.stream { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px solid rgba(127,127,127,.25); }
+.stream .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stream .age { color: var(--muted); font-size: 11px; }
+button { font: inherit; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; }
+button.secondary { background: transparent; color: inherit; border-color: var(--muted); }
+#linked { margin-top: 8px; padding: 8px; border-radius: 6px; background: rgba(52,199,89,.12); }
+.foot { margin-top: 12px; font-size: 12px; }
+input, select { font: inherit; width: 100%; box-sizing: border-box; padding: 4px; margin: 2px 0 8px; }

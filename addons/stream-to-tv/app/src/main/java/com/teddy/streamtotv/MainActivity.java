@@ -1,0 +1,443 @@
+package com.teddy.streamtotv;
+
+import android.app.Activity;
+import android.content.SharedPreferences;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
+import android.view.Gravity;
+import android.view.KeyEvent;
+import android.view.View;
+import android.view.WindowManager;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+import androidx.annotation.OptIn;
+import androidx.media3.common.C;
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.MimeTypes;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.common.Player;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.common.util.Util;
+import androidx.media3.datasource.DataSpec;
+import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.datasource.HttpDataSource;
+import androidx.media3.datasource.ResolvingDataSource;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.analytics.AnalyticsListener;
+import androidx.media3.exoplayer.source.LoadEventInfo;
+import androidx.media3.exoplayer.source.MediaLoadData;
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+import androidx.media3.ui.AspectRatioFrameLayout;
+import androidx.media3.ui.PlayerView;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.security.SecureRandom;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
+
+/**
+ * Stream to TV: plays a live stream the laptop sends (see ControlServer), on the TV's own hardware decoder,
+ * and keeps it playing across the site's token renewals (see TokenRewriter). Nothing runs once this screen
+ * is closed: the server stops and the player is released in onStop.
+ */
+@OptIn(markerClass = UnstableApi.class)
+public class MainActivity extends Activity implements ControlServer.Handler {
+    private static final String TAG = "StreamToTV";
+    /** Request headers a browser adds on its own; the TV's HTTP stack sets its own or must not send them. */
+    private static final java.util.Set<String> SKIP_HEADERS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "host", "connection", "content-length", "accept-encoding", "te", "upgrade-insecure-requests",
+            "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site", "sec-fetch-user", "priority", "pragma",
+            "cache-control", "if-none-match", "if-modified-since", "range"));
+    private static final long RETRY_MS = 3000, TOKEN_WAIT_RETRY_MS = 10000;
+    /** How far behind live to play when the laptop does not say; its add-on's Settings choose 0 to 60 s. */
+    private static final int DEFAULT_BUFFER_S = 30, MAX_BUFFER_S = 120;
+
+    enum State { READY, LOADING, PLAYING, WAITING_FOR_TOKEN, RETRYING }
+
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final TokenRewriter rewriter = new TokenRewriter();
+    private ControlServer server;
+    private String pin;
+
+    private PlayerView playerView;
+    private LinearLayout panel;
+    private TextView status;
+    private TextView corner;
+    private ExoPlayer player;
+
+    private volatile State state = State.READY;
+    private volatile String title = "";
+    private volatile String streamHost;
+    private volatile int bufferSeconds;
+    /** Set when a stream (re)starts with a delay, until placeBehindLive has moved playback back by it. */
+    private boolean placeBehindLive;
+    private int failures;
+    /** Since the stream started: rebuffers while it was playing, and player errors. Shown in /status. */
+    private volatile int stalls, errors;
+    private final SpeedCheck speed = new SpeedCheck();
+    private final Runnable retryTask = this::retry;
+
+    @Override
+    protected void onCreate(Bundle saved) {
+        super.onCreate(saved);
+        pin = loadPin();
+
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Color.BLACK);
+        playerView = new PlayerView(this);
+        playerView.setUseController(false);
+        playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
+        root.addView(playerView, new FrameLayout.LayoutParams(-1, -1));
+
+        panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setGravity(Gravity.CENTER);
+        panel.setBackgroundColor(0xE6101418);
+        TextView name = text(46, true);
+        name.setText(getString(R.string.app_name));
+        TextView where = text(26, false);
+        where.setText(String.format(Locale.US, "Address  %s:%d\nPIN  %s", ipAddress(), ControlServer.PORT, pin));
+        where.setTextColor(0xFF34C759);
+        status = text(24, false);
+        status.setTextColor(0xFFB0B8C0);
+        panel.addView(name);
+        panel.addView(where);
+        panel.addView(status);
+        root.addView(panel, new FrameLayout.LayoutParams(-1, -1));
+
+        corner = text(18, false);
+        corner.setBackgroundColor(0xB0000000);
+        corner.setPadding(24, 12, 24, 12);
+        corner.setVisibility(View.GONE);
+        root.addView(corner, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END));
+        setContentView(root);
+        show(State.READY, "Open the stream in Firefox and press Send to TV.");
+    }
+
+    private TextView text(int sp, boolean bold) {
+        TextView t = new TextView(this);
+        t.setTextColor(Color.WHITE);
+        t.setTextSize(sp);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(48, 16, 48, 16);
+        if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
+        return t;
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        server = new ControlServer(pin, this);
+        server.start();
+    }
+
+    @Override
+    protected void onStop() {
+        server.close();
+        server = null;
+        stopPlayback("Open the stream in Firefox and press Send to TV.");
+        super.onStop();
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK && player != null) {
+            stopPlayback("Stopped. Send again from Firefox to resume.");
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
+    // ControlServer.Handler: called on the server thread.
+
+    @Override
+    public String play(String url, Map<String, String> headers, String newTitle, int buffer) {
+        if (TokenRewriter.hostOf(url) == null || !(url.startsWith("http://") || url.startsWith("https://"))) {
+            return "url must be http or https";
+        }
+        int seconds = buffer < 0 ? DEFAULT_BUFFER_S : Math.min(buffer, MAX_BUFFER_S);
+        main.post(() -> startPlayback(url, headers, newTitle, seconds));
+        return null;
+    }
+
+    @Override
+    public String token(String url) {
+        if (player == null && state == State.READY) return "nothing is playing";
+        if (rewriter.update(url)) {
+            Log.i(TAG, "token renewed, generation " + rewriter.generation());
+            main.post(() -> {
+                flash("Stream token renewed", 3000);
+                if (state == State.WAITING_FOR_TOKEN) retry();
+            });
+        }
+        return null;
+    }
+
+    @Override
+    public void stop() {
+        main.post(() -> stopPlayback("Stopped from the laptop."));
+    }
+
+    @Override
+    public JSONObject status(boolean full) {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("app", "stream-to-tv");
+            o.put("state", state.name().toLowerCase(Locale.ROOT));
+            o.put("renewals", rewriter.generation());
+            o.put("stalls", stalls);
+            o.put("errors", errors);
+            o.put("slow", speed.slow());
+            if (full) {
+                o.put("title", title);
+                o.put("host", streamHost == null ? JSONObject.NULL : streamHost);
+                o.put("bufferSeconds", bufferSeconds);
+                o.put("downloadMbps", Math.round(speed.downloadMbps() * 10) / 10.0);
+                o.put("streamMbps", Math.round(speed.streamMbps() * 10) / 10.0);
+            }
+        } catch (JSONException ignored) {
+        }
+        return o;
+    }
+
+    @Override
+    public void serverFailed(String reason) {
+        main.post(() -> {
+            if (state == State.READY) show(State.READY, reason + "\nClose Stream to TV and open it again.");
+        });
+    }
+
+    // Playback, on the main thread.
+
+    private void startPlayback(String url, Map<String, String> headers, String newTitle, int buffer) {
+        releasePlayer();
+        title = newTitle == null ? "" : newTitle;
+        streamHost = TokenRewriter.hostOf(url);
+        rewriter.reset(url);
+        bufferSeconds = buffer;
+        failures = 0;
+        stalls = 0;
+        speed.reset();
+        errors = 0;
+
+        Map<String, String> sendHeaders = new LinkedHashMap<>();
+        String userAgent = null;
+        for (Map.Entry<String, String> e : headers.entrySet()) {
+            String k = e.getKey().toLowerCase(Locale.ROOT);
+            if (k.equals("user-agent")) userAgent = e.getValue();
+            else if (!SKIP_HEADERS.contains(k)) sendHeaders.put(e.getKey(), e.getValue());
+        }
+        DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+                .setUserAgent(userAgent != null ? userAgent : "Mozilla/5.0 (Android TV) StreamToTV/0.3")
+                .setDefaultRequestProperties(sendHeaders)
+                .setAllowCrossProtocolRedirects(true)
+                .setConnectTimeoutMs(10_000)
+                .setReadTimeoutMs(15_000);
+        ResolvingDataSource.Factory resolving = new ResolvingDataSource.Factory(http, spec -> {
+            String before = spec.uri.toString();
+            String after = rewriter.rewrite(before);
+            return after.equals(before) ? spec : spec.withUri(Uri.parse(after));
+        });
+
+        player = new ExoPlayer.Builder(this)
+                .setMediaSourceFactory(new DefaultMediaSourceFactory(resolving))
+                .build();
+        player.addListener(new Player.Listener() {
+            @Override
+            public void onPlaybackStateChanged(int s) {
+                if (s == Player.STATE_READY && player != null && player.getPlayWhenReady()) {
+                    if (placeBehindLive()) return;
+                    failures = 0;
+                    show(State.PLAYING, "");
+                } else if (s == Player.STATE_BUFFERING && state == State.PLAYING) {
+                    stalls++;
+                    Log.i(TAG, "buffering, stall " + stalls);
+                    flash(speed.slow() ? "Buffering… this TV's connection is slower than the stream" : "Buffering…", 3000);
+                }
+            }
+
+            @Override
+            public void onPlayerError(PlaybackException error) {
+                handleError(error);
+            }
+        });
+        player.addAnalyticsListener(new AnalyticsListener() {
+            @Override
+            public void onLoadCompleted(EventTime time, LoadEventInfo load, MediaLoadData data) {
+                // Video segments only (or muxed audio and video): a separate audio track loads alongside them.
+                if (data.dataType != C.DATA_TYPE_MEDIA || data.mediaStartTimeMs == C.TIME_UNSET
+                        || data.mediaEndTimeMs == C.TIME_UNSET
+                        || (data.trackType != C.TRACK_TYPE_DEFAULT && data.trackType != C.TRACK_TYPE_VIDEO)) {
+                    return;
+                }
+                if (!speed.add(load.bytesLoaded, load.loadDurationMs, data.mediaEndTimeMs - data.mediaStartTimeMs)) {
+                    return;
+                }
+                String speeds = String.format(Locale.US, "%.1f Mbit/s, the stream needs %.1f",
+                        speed.downloadMbps(), speed.streamMbps());
+                Log.i(TAG, (speed.slow() ? "slower than the stream: " : "fast enough again: ") + speeds);
+                if (speed.slow()) {
+                    flash("This TV downloads the stream more slowly than it plays\n(" + speeds + "),\nso it will pause"
+                            + " every few seconds. Another server on the site may be faster.", 15_000);
+                }
+            }
+        });
+        playerView.setPlayer(player);
+
+        MediaItem.Builder item = new MediaItem.Builder().setUri(url);
+        if (buffer > 0) {
+            // Played at normal speed only: ExoPlayer otherwise speeds up to "catch up" with live, which it measures
+            // against the playlist's clock. On a stream whose clock runs behind (39 s on one site) it then sits at
+            // the newest segment with nothing in hand, and every slow segment is a pause. The delay is set by a
+            // seek instead, from the newest segment (see placeBehindLive).
+            item.setLiveConfiguration(new MediaItem.LiveConfiguration.Builder()
+                    .setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build());
+            placeBehindLive = true;
+        }
+        if (looksLikeHls(Uri.parse(url))) item.setMimeType(MimeTypes.APPLICATION_M3U8);
+        player.setMediaItem(item.build());
+        player.setPlayWhenReady(true);
+        player.prepare();
+        show(State.LOADING, "Loading " + (title.isEmpty() ? streamHost : title) + "…");
+        Log.i(TAG, "playing " + streamHost + " with " + sendHeaders.keySet());
+    }
+
+    /**
+     * HLS unless the URL says otherwise. The add-on sends only playlists, and some have no .m3u8 in the path (an
+     * ad-inserting proxy's), which ExoPlayer would otherwise take for a plain media file.
+     */
+    private static boolean looksLikeHls(Uri uri) {
+        int type = Util.inferContentType(uri);
+        if (type != C.CONTENT_TYPE_OTHER) return type == C.CONTENT_TYPE_HLS;
+        String last = uri.getLastPathSegment();
+        return last == null || !last.matches("(?i).*\\.(mp4|m4v|mkv|webm|mov|mp3|m4a|aac|ts)");
+    }
+
+    private void handleError(PlaybackException error) {
+        Log.w(TAG, "playback error " + error.getErrorCodeName(), error);
+        if (player == null) return;
+        errors++;
+        int http = httpStatus(error);
+        if (http == 401 || http == 403 || http == 410) {
+            // The site's token has expired. The laptop sends a fresh one as soon as its page gets it; retry
+            // then, and every few seconds in case the refusal was a blip.
+            show(State.WAITING_FOR_TOKEN, "The stream's token expired.\nWaiting for Firefox to send a fresh one…");
+            main.removeCallbacks(retryTask);
+            main.postDelayed(retryTask, TOKEN_WAIT_RETRY_MS);
+            return;
+        }
+        failures++;
+        long delay = Math.min(RETRY_MS * failures, 15_000);
+        show(State.RETRYING, "Connection problem (" + error.getErrorCodeName() + ").\nTrying again…");
+        main.removeCallbacks(retryTask);
+        main.postDelayed(retryTask, delay);
+    }
+
+    private static int httpStatus(Throwable t) {
+        for (Throwable c = t; c != null; c = c.getCause()) {
+            if (c instanceof HttpDataSource.InvalidResponseCodeException) {
+                return ((HttpDataSource.InvalidResponseCodeException) c).responseCode;
+            }
+        }
+        return -1;
+    }
+
+    private void retry() {
+        main.removeCallbacks(retryTask);
+        if (player == null) return;
+        // A live stream resumes at the live edge rather than where it stopped, then steps back by the delay.
+        player.seekToDefaultPosition();
+        placeBehindLive = bufferSeconds > 0;
+        player.prepare();
+        player.setPlayWhenReady(true);
+    }
+
+    /**
+     * Once the playlist is loaded, moves playback back to the chosen delay behind its newest segment, keeping at
+     * least 10 s of the playlist behind the position so it does not slide out of the window. Returns true when it
+     * seeked, so the caller waits for the next ready state.
+     */
+    private boolean placeBehindLive() {
+        if (!placeBehindLive || !player.isCurrentMediaItemLive()) return false;
+        placeBehindLive = false;
+        long window = player.getDuration();
+        if (window == C.TIME_UNSET) return false;
+        long target = Math.max(Math.min(window, 10_000), window - bufferSeconds * 1000L);
+        if (player.getCurrentPosition() - target < 2_000) return false;
+        Log.i(TAG, "playing " + (window - target) / 1000 + " s behind the newest segment");
+        player.seekTo(target);
+        return true;
+    }
+
+    private void stopPlayback(String message) {
+        releasePlayer();
+        title = "";
+        streamHost = null;
+        show(State.READY, message);
+    }
+
+    private void releasePlayer() {
+        main.removeCallbacks(retryTask);
+        if (player != null) {
+            playerView.setPlayer(null);
+            player.release();
+            player = null;
+        }
+    }
+
+    private void show(State s, String message) {
+        state = s;
+        boolean video = s == State.PLAYING;
+        panel.setVisibility(video ? View.GONE : View.VISIBLE);
+        status.setText(message);
+        // The screen may sleep on the idle screen; while a stream loads, plays or waits for a token it stays on.
+        if (s != State.READY) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    }
+
+    private final Runnable hideCorner = () -> corner.setVisibility(View.GONE);
+
+    private void flash(String message, long ms) {
+        corner.setText(message);
+        corner.setVisibility(View.VISIBLE);
+        main.removeCallbacks(hideCorner);
+        main.postDelayed(hideCorner, ms);
+    }
+
+    private String loadPin() {
+        SharedPreferences p = getSharedPreferences("stream-to-tv", MODE_PRIVATE);
+        String saved = p.getString("pin", null);
+        if (saved != null) return saved;
+        String fresh = String.format(Locale.US, "%04d", new SecureRandom().nextInt(10_000));
+        p.edit().putString("pin", fresh).apply();
+        return fresh;
+    }
+
+    /** The TV's address on the home network, for the laptop's settings. */
+    private static String ipAddress() {
+        try {
+            for (NetworkInterface n : Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                if (!n.isUp() || n.isLoopback()) continue;
+                for (InetAddress a : Collections.list(n.getInetAddresses())) {
+                    if (a instanceof Inet4Address && a.isSiteLocalAddress()) return a.getHostAddress();
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return "this TV's IP";
+    }
+}

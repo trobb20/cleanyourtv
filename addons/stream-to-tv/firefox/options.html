@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>Stream to TV settings</h1>
+  <p class="muted">Open Stream to TV on the TV; it shows its address and PIN.</p>
+  <label>TV address <input id="address" placeholder="192.168.1.50:8642"></label>
+  <label>PIN <input id="pin" inputmode="numeric" maxlength="4" placeholder="1234"></label>
+  <label>Delay behind live
+    <select id="buffer">
+      <option value="0">As little as the stream allows</option>
+      <option value="10">10 seconds</option>
+      <option value="20">20 seconds</option>
+      <option value="30">30 seconds</option>
+      <option value="60">60 seconds</option>
+    </select>
+  </label>
+  <p class="muted">More delay gives the TV more video in hand, so a slow stream pauses less. It applies the next time
+    you press Send or Resend.</p>
+  <button id="save">Save and test</button>
+  <p id="result"></p>
+  <script src="options.js"></script>
+</body>
+</html>
