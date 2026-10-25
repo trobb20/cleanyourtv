@@ -89,7 +89,9 @@ Firefox. A VPN on the laptop must let LAN traffic through (in Windscribe, **Allo
   nor the laptop's IP.
 - **The TV fetches the stream itself.** If its own connection to the stream's server is slower than the stream,
   it pauses every few seconds once the delay behind live is used up, whatever the delay. The laptop may get the
-  same server faster (through a VPN, say), so a stream that plays on the laptop can still stall on the TV.
+  same server faster (through a VPN, say), so a stream that plays on the laptop can still stall on the TV. The TV
+  times each segment it downloads, and when downloading takes longer than playing it says so on screen and in
+  the popup, with both speeds.
 - **One stream at a time.** Sending another replaces it.
 
 ## Tested on

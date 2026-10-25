@@ -29,6 +29,13 @@ async function render() {
     tvEl.className = "ok";
     const s = st.tvStatus;
     tvEl.textContent = `TV connected · ${s.state}${s.title ? " · " + s.title : ""}`;
+    if (s.slow) {
+      const w = document.createElement("div");
+      w.className = "error";
+      w.textContent = `The TV downloads this stream more slowly than it plays (${s.downloadMbps} Mbit/s, it needs ` +
+        `${s.streamMbps}), so it will pause every few seconds. Another server on the site may be faster.`;
+      tvEl.append(w);
+    }
   }
 
   const l = st.linked;

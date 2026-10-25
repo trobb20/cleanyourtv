@@ -30,6 +30,9 @@ import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.datasource.ResolvingDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.analytics.AnalyticsListener;
+import androidx.media3.exoplayer.source.LoadEventInfo;
+import androidx.media3.exoplayer.source.MediaLoadData;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.PlayerView;
@@ -85,6 +88,7 @@ public class MainActivity extends Activity implements ControlServer.Handler {
     private int failures;
     /** Since the stream started: rebuffers while it was playing, and player errors. Shown in /status. */
     private volatile int stalls, errors;
+    private final SpeedCheck speed = new SpeedCheck();
     private final Runnable retryTask = this::retry;
 
     @Override
@@ -176,7 +180,7 @@ public class MainActivity extends Activity implements ControlServer.Handler {
         if (rewriter.update(url)) {
             Log.i(TAG, "token renewed, generation " + rewriter.generation());
             main.post(() -> {
-                flash("Stream token renewed");
+                flash("Stream token renewed", 3000);
                 if (state == State.WAITING_FOR_TOKEN) retry();
             });
         }
@@ -197,10 +201,13 @@ public class MainActivity extends Activity implements ControlServer.Handler {
             o.put("renewals", rewriter.generation());
             o.put("stalls", stalls);
             o.put("errors", errors);
+            o.put("slow", speed.slow());
             if (full) {
                 o.put("title", title);
                 o.put("host", streamHost == null ? JSONObject.NULL : streamHost);
                 o.put("bufferSeconds", bufferSeconds);
+                o.put("downloadMbps", Math.round(speed.downloadMbps() * 10) / 10.0);
+                o.put("streamMbps", Math.round(speed.streamMbps() * 10) / 10.0);
             }
         } catch (JSONException ignored) {
         }
@@ -224,6 +231,7 @@ public class MainActivity extends Activity implements ControlServer.Handler {
         bufferSeconds = buffer;
         failures = 0;
         stalls = 0;
+        speed.reset();
         errors = 0;
 
         Map<String, String> sendHeaders = new LinkedHashMap<>();
@@ -258,13 +266,34 @@ public class MainActivity extends Activity implements ControlServer.Handler {
                 } else if (s == Player.STATE_BUFFERING && state == State.PLAYING) {
                     stalls++;
                     Log.i(TAG, "buffering, stall " + stalls);
-                    flash("Buffering…");
+                    flash(speed.slow() ? "Buffering… this TV's connection is slower than the stream" : "Buffering…", 3000);
                 }
             }
 
             @Override
             public void onPlayerError(PlaybackException error) {
                 handleError(error);
+            }
+        });
+        player.addAnalyticsListener(new AnalyticsListener() {
+            @Override
+            public void onLoadCompleted(EventTime time, LoadEventInfo load, MediaLoadData data) {
+                // Video segments only (or muxed audio and video): a separate audio track loads alongside them.
+                if (data.dataType != C.DATA_TYPE_MEDIA || data.mediaStartTimeMs == C.TIME_UNSET
+                        || data.mediaEndTimeMs == C.TIME_UNSET
+                        || (data.trackType != C.TRACK_TYPE_DEFAULT && data.trackType != C.TRACK_TYPE_VIDEO)) {
+                    return;
+                }
+                if (!speed.add(load.bytesLoaded, load.loadDurationMs, data.mediaEndTimeMs - data.mediaStartTimeMs)) {
+                    return;
+                }
+                String speeds = String.format(Locale.US, "%.1f Mbit/s, the stream needs %.1f",
+                        speed.downloadMbps(), speed.streamMbps());
+                Log.i(TAG, (speed.slow() ? "slower than the stream: " : "fast enough again: ") + speeds);
+                if (speed.slow()) {
+                    flash("This TV downloads the stream more slowly than it plays\n(" + speeds + "),\nso it will pause"
+                            + " every few seconds. Another server on the site may be faster.", 15_000);
+                }
             }
         });
         playerView.setPlayer(player);
@@ -382,11 +411,11 @@ public class MainActivity extends Activity implements ControlServer.Handler {
 
     private final Runnable hideCorner = () -> corner.setVisibility(View.GONE);
 
-    private void flash(String message) {
+    private void flash(String message, long ms) {
         corner.setText(message);
         corner.setVisibility(View.VISIBLE);
         main.removeCallbacks(hideCorner);
-        main.postDelayed(hideCorner, 3000);
+        main.postDelayed(hideCorner, ms);
     }
 
     private String loadPin() {

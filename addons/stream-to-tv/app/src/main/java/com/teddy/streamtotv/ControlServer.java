@@ -25,7 +25,7 @@ import java.util.concurrent.RejectedExecutionException;
  * The tiny HTTP server the laptop talks to, on the home network, only while the app's screen is open
  * (started in onStart, closed in onStop). Every POST carries the PIN shown on the TV.
  *
- *   GET  /status                       {"app","state","renewals","stalls","errors"}; title and host with X-PIN
+ *   GET  /status                       {"app","state","renewals","stalls","errors","slow"}; title, host and speeds with X-PIN
  *   POST /play   {"pin","url","headers":{...},"title","bufferSeconds"}   start a stream
  *   POST /token  {"pin","url"}         the same playlist with a renewed token; playback keeps going
  *   POST /stop   {"pin"}
