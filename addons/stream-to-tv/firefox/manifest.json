@@ -1,0 +1,22 @@
+{
+  "manifest_version": 2,
+  "name": "Stream to TV",
+  "version": "0.1",
+  "description": "Sends the live stream playing in a tab to the Stream to TV app on an Android TV, and keeps passing it the page's renewed stream tokens.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "stream-to-tv@trobb20.github.io",
+      "strict_min_version": "115.0",
+      "data_collection_permissions": { "required": ["none"] }
+    }
+  },
+  "permissions": ["webRequest", "storage", "tabs", "<all_urls>"],
+  "background": { "scripts": ["background.js"] },
+  "browser_action": {
+    "default_title": "Stream to TV",
+    "default_popup": "popup.html",
+    "default_icon": "icons/icon.svg"
+  },
+  "options_ui": { "page": "options.html" },
+  "icons": { "48": "icons/icon.svg", "96": "icons/icon.svg" }
+}
