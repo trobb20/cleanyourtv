@@ -80,8 +80,10 @@ function freshen(url, tabStreams) {
 }
 
 async function settings() {
-  const s = await browser.storage.local.get({ address: "", pin: "" });
-  return { address: s.address.trim().replace(/^https?:\/\//, "").replace(/\/+$/, ""), pin: s.pin.trim() };
+  const s = await browser.storage.local.get({ address: "", pin: "", buffer: 30 });
+  return {
+    address: s.address.trim().replace(/^https?:\/\//, "").replace(/\/+$/, ""), pin: s.pin.trim(), buffer: s.buffer,
+  };
 }
 
 browser.storage.onChanged.addListener(() => {
@@ -245,7 +247,8 @@ browser.runtime.onMessage.addListener(async (msg) => {
       const s = streams.get(msg.tabId)?.get(msg.key);
       if (!s) throw new Error("That stream is gone; reload the page.");
       const url = freshen(s.url, streams.get(msg.tabId));
-      await tv("/play", { url, headers: s.headers, title: msg.title || "" });
+      const { buffer } = await settings();
+      await tv("/play", { url, headers: s.headers, title: msg.title || "", bufferSeconds: buffer });
       const previous = linked;
       if (previous?.timer) clearTimeout(previous.timer);
       linked = {

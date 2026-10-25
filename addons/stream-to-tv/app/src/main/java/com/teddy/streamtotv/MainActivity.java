@@ -60,6 +60,8 @@ public class MainActivity extends Activity implements ControlServer.Handler {
             "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site", "sec-fetch-user", "priority", "pragma",
             "cache-control", "if-none-match", "if-modified-since", "range"));
     private static final long RETRY_MS = 3000, TOKEN_WAIT_RETRY_MS = 10000;
+    /** How far behind live to play when the laptop does not say; its add-on's Settings choose 0 to 60 s. */
+    private static final int DEFAULT_BUFFER_S = 30, MAX_BUFFER_S = 120;
 
     enum State { READY, LOADING, PLAYING, WAITING_FOR_TOKEN, RETRYING }
 
@@ -77,6 +79,9 @@ public class MainActivity extends Activity implements ControlServer.Handler {
     private volatile State state = State.READY;
     private volatile String title = "";
     private volatile String streamHost;
+    private volatile int bufferSeconds;
+    /** Set when a stream (re)starts with a delay, until placeBehindLive has moved playback back by it. */
+    private boolean placeBehindLive;
     private int failures;
     /** Since the stream started: rebuffers while it was playing, and player errors. Shown in /status. */
     private volatile int stalls, errors;
@@ -156,11 +161,12 @@ public class MainActivity extends Activity implements ControlServer.Handler {
     // ControlServer.Handler: called on the server thread.
 
     @Override
-    public String play(String url, Map<String, String> headers, String newTitle) {
+    public String play(String url, Map<String, String> headers, String newTitle, int buffer) {
         if (TokenRewriter.hostOf(url) == null || !(url.startsWith("http://") || url.startsWith("https://"))) {
             return "url must be http or https";
         }
-        main.post(() -> startPlayback(url, headers, newTitle));
+        int seconds = buffer < 0 ? DEFAULT_BUFFER_S : Math.min(buffer, MAX_BUFFER_S);
+        main.post(() -> startPlayback(url, headers, newTitle, seconds));
         return null;
     }
 
@@ -194,6 +200,7 @@ public class MainActivity extends Activity implements ControlServer.Handler {
             if (full) {
                 o.put("title", title);
                 o.put("host", streamHost == null ? JSONObject.NULL : streamHost);
+                o.put("bufferSeconds", bufferSeconds);
             }
         } catch (JSONException ignored) {
         }
@@ -209,11 +216,12 @@ public class MainActivity extends Activity implements ControlServer.Handler {
 
     // Playback, on the main thread.
 
-    private void startPlayback(String url, Map<String, String> headers, String newTitle) {
+    private void startPlayback(String url, Map<String, String> headers, String newTitle, int buffer) {
         releasePlayer();
         title = newTitle == null ? "" : newTitle;
         streamHost = TokenRewriter.hostOf(url);
         rewriter.reset(url);
+        bufferSeconds = buffer;
         failures = 0;
         stalls = 0;
         errors = 0;
@@ -226,7 +234,7 @@ public class MainActivity extends Activity implements ControlServer.Handler {
             else if (!SKIP_HEADERS.contains(k)) sendHeaders.put(e.getKey(), e.getValue());
         }
         DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-                .setUserAgent(userAgent != null ? userAgent : "Mozilla/5.0 (Android TV) StreamToTV/0.2")
+                .setUserAgent(userAgent != null ? userAgent : "Mozilla/5.0 (Android TV) StreamToTV/0.3")
                 .setDefaultRequestProperties(sendHeaders)
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(10_000)
@@ -244,6 +252,7 @@ public class MainActivity extends Activity implements ControlServer.Handler {
             @Override
             public void onPlaybackStateChanged(int s) {
                 if (s == Player.STATE_READY && player != null && player.getPlayWhenReady()) {
+                    if (placeBehindLive()) return;
                     failures = 0;
                     show(State.PLAYING, "");
                 } else if (s == Player.STATE_BUFFERING && state == State.PLAYING) {
@@ -261,6 +270,15 @@ public class MainActivity extends Activity implements ControlServer.Handler {
         playerView.setPlayer(player);
 
         MediaItem.Builder item = new MediaItem.Builder().setUri(url);
+        if (buffer > 0) {
+            // Played at normal speed only: ExoPlayer otherwise speeds up to "catch up" with live, which it measures
+            // against the playlist's clock. On a stream whose clock runs behind (39 s on one site) it then sits at
+            // the newest segment with nothing in hand, and every slow segment is a pause. The delay is set by a
+            // seek instead, from the newest segment (see placeBehindLive).
+            item.setLiveConfiguration(new MediaItem.LiveConfiguration.Builder()
+                    .setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build());
+            placeBehindLive = true;
+        }
         if (looksLikeHls(Uri.parse(url))) item.setMimeType(MimeTypes.APPLICATION_M3U8);
         player.setMediaItem(item.build());
         player.setPlayWhenReady(true);
@@ -312,10 +330,28 @@ public class MainActivity extends Activity implements ControlServer.Handler {
     private void retry() {
         main.removeCallbacks(retryTask);
         if (player == null) return;
-        // A live stream resumes at the live edge rather than where it stopped.
+        // A live stream resumes at the live edge rather than where it stopped, then steps back by the delay.
         player.seekToDefaultPosition();
+        placeBehindLive = bufferSeconds > 0;
         player.prepare();
         player.setPlayWhenReady(true);
+    }
+
+    /**
+     * Once the playlist is loaded, moves playback back to the chosen delay behind its newest segment, keeping at
+     * least 10 s of the playlist behind the position so it does not slide out of the window. Returns true when it
+     * seeked, so the caller waits for the next ready state.
+     */
+    private boolean placeBehindLive() {
+        if (!placeBehindLive || !player.isCurrentMediaItemLive()) return false;
+        placeBehindLive = false;
+        long window = player.getDuration();
+        if (window == C.TIME_UNSET) return false;
+        long target = Math.max(Math.min(window, 10_000), window - bufferSeconds * 1000L);
+        if (player.getCurrentPosition() - target < 2_000) return false;
+        Log.i(TAG, "playing " + (window - target) / 1000 + " s behind the newest segment");
+        player.seekTo(target);
+        return true;
     }
 
     private void stopPlayback(String message) {

@@ -26,7 +26,7 @@ import java.util.concurrent.RejectedExecutionException;
  * (started in onStart, closed in onStop). Every POST carries the PIN shown on the TV.
  *
  *   GET  /status                       {"app","state","renewals","stalls","errors"}; title and host with X-PIN
- *   POST /play   {"pin","url","headers":{...},"title"}   start a stream
+ *   POST /play   {"pin","url","headers":{...},"title","bufferSeconds"}   start a stream
  *   POST /token  {"pin","url"}         the same playlist with a renewed token; playback keeps going
  *   POST /stop   {"pin"}
  *
@@ -45,7 +45,8 @@ final class ControlServer {
 
     interface Handler {
         /** Returns null when accepted, or a reason. Called on the server thread. */
-        String play(String url, Map<String, String> headers, String title);
+        /** {@code bufferSeconds}: how far behind live to play; 0 for as close as the stream allows, -1 when not given. */
+        String play(String url, Map<String, String> headers, String title, int bufferSeconds);
         String token(String url);
         void stop();
         /** The playing title and host are left out unless {@code full}. */
@@ -282,7 +283,8 @@ final class ControlServer {
                         headers.put(k, h.optString(k));
                     }
                 }
-                problem = handler.play(json.optString("url"), headers, json.optString("title"));
+                problem = handler.play(json.optString("url"), headers, json.optString("title"),
+                        json.optInt("bufferSeconds", -1));
                 break;
             case "/token":
                 problem = handler.token(json.optString("url"));

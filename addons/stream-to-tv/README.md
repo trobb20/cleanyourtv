@@ -24,7 +24,8 @@ ordinary app.
 
 1. Open **Stream to TV** on the TV. It shows its address and a PIN.
 2. In Firefox, open the add-on's **Settings** (toolbar button, then Settings), enter both and press **Save and
-   test**.
+   test**. **Delay behind live** (30 seconds unless you change it) is how far behind the live edge the TV plays:
+   more gives it more video in hand, so a slow stream pauses less. A new choice applies at the next Send.
 3. Start the video on the page. The toolbar button shows how many streams the tab has loaded.
 4. Press the button, then **Send to TV** next to the stream. The top row is usually the one: playlists the page
    is still fetching are listed first, and the add-on sends the newest token the page has. The badge turns to
@@ -53,9 +54,9 @@ The Firefox add-on:
 | `webRequest` | To see the tab's playlist requests (`.m3u8`), with the User-Agent, Referer and Origin they carry. |
 | `<all_urls>` | Streams can come from any host, and the add-on talks to the TV on your home network. |
 | `tabs` | The current tab, to list its streams and send its title. |
-| `storage` | The TV's address and PIN. |
+| `storage` | The TV's address, PIN and delay behind live. |
 
-The add-on sends the TV only the playlist URL, those three headers and the tab's title; never cookies. Nothing
+The add-on sends the TV only the playlist URL, those three headers, the tab's title and the delay; never cookies. Nothing
 goes anywhere but your TV. No telemetry, ads or accounts in either part.
 
 ## Build and install
@@ -86,6 +87,9 @@ Firefox. A VPN on the laptop must let LAN traffic through (in Windscribe, **Allo
   expires. The TV then waits for a fresh one and picks up again when the add-on sends it.
 - **Tokens tied to cookies or to the laptop's IP address** don't work, because the TV sends neither the cookies
   nor the laptop's IP.
+- **The TV fetches the stream itself.** If its own connection to the stream's server is slower than the stream,
+  it pauses every few seconds once the delay behind live is used up, whatever the delay. The laptop may get the
+  same server faster (through a VPN, say), so a stream that plays on the laptop can still stall on the TV.
 - **One stream at a time.** Sending another replaces it.
 
 ## Tested on
