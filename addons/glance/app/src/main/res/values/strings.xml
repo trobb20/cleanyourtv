@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Glance</string>
+
+    <string name="now_playing">Now playing</string>
+    <string name="paused">Paused</string>
+    <string name="continue_watching">Continue watching</string>
+    <string name="nothing_to_resume">Nothing to resume yet. Start a show in Netflix, Max, Disney+, Hulu or Peacock.</string>
+    <string name="for_you">For you</string>
+    <string name="nothing_for_you">No picks from your apps yet.</string>
+    <string name="snow_title">Snow · Ikon New England</string>
+    <string name="next_3_days">next 3 days</string>
+    <string name="snow_footer">Summit high %1$d°F · last 24 h %2$s</string>
+    <string name="snow_offline">Can\'t reach Open-Meteo right now; it tries again next time.</string>
+</resources>

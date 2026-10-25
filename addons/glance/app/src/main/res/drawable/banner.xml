@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The TV banner: a row of three cards under a snowy peak. Drawn for this add-on, no third-party art. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp" android:height="180dp"
+    android:viewportWidth="320" android:viewportHeight="180">
+    <path android:fillColor="#FF101C2C" android:pathData="M0,0h320v180h-320z" />
+    <path android:fillColor="#FF2C4A6E" android:pathData="M60,92l60,-62l40,40l30,-24l70,46z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M106,44l14,-14l14,14l-8,6l-6,-5l-6,5z" />
+    <path android:fillColor="#FF4A90D9" android:pathData="M40,108h72v44h-72z" />
+    <path android:fillColor="#FF1DB954" android:pathData="M124,108h72v44h-72z" />
+    <path android:fillColor="#FFE8EEF5" android:pathData="M208,108h72v44h-72z" />
+</vector>

@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+    <!-- Posters from the apps' own image servers, and snow from Open-Meteo. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Other apps' Continue watching (Watch Next) and preview rows from the TV provider. Granted with pm grant. -->
+    <uses-permission android:name="android.permission.READ_TV_LISTINGS" />
+
+    <!-- Reading the rows the launcher shows (glance_row): your watch history and what is playing. Signature, so only
+         a launcher built with the same key gets it. -->
+    <permission
+        android:name="com.teddy.glance.permission.READ_ROWS"
+        android:protectionLevel="signature" />
+
+    <!-- The TV apps whose cards it opens: names, start screens and deep links. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+        </intent>
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:banner="@drawable/banner"
+        android:icon="@drawable/icon"
+        android:label="@string/app_name"
+        android:supportsRtl="false"
+        android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
+
+        <activity
+            android:name=".GlanceActivity"
+            android:exported="true"
+            android:screenOrientation="landscape">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+            <!-- Clean Your TV module card (docs/specs/card.md): the tile shows as "Glance" once the owner says Show. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="com.gathin.tvhome.category.DOCK_CARD" />
+            </intent-filter>
+            <meta-data android:name="com.gathin.tvhome.card" android:resource="@xml/module_card" />
+        </activity>
+
+        <!-- Opens a card from the launcher's row; only READ_ROWS holders may start it. -->
+        <activity
+            android:name=".OpenActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:permission="com.teddy.glance.permission.READ_ROWS"
+            android:theme="@android:style/Theme.NoDisplay" />
+
+        <provider
+            android:name=".GlanceProvider"
+            android:authorities="com.teddy.glance.rows"
+            android:exported="true"
+            android:readPermission="com.teddy.glance.permission.READ_ROWS"
+            android:writePermission="com.teddy.glance.permission.READ_ROWS" />
+
+        <!-- What the TV shares, for debugging: am start -n com.teddy.glance/.ProbeActivity, logcat -s GlanceProbe -->
+        <activity
+            android:name=".ProbeActivity"
+            android:exported="true"
+            android:screenOrientation="landscape" />
+
+        <!-- Only unlocks MediaSessionManager.getActiveSessions for Now playing; every notification is ignored.
+             Enabled with: cmd notification allow_listener com.teddy.glance/.MediaListener -->
+        <service
+            android:name=".MediaListener"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>
