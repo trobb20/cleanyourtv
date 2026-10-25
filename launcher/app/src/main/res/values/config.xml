@@ -351,6 +351,12 @@
          "show_stats": true. Nothing is read, and the clock does not move, while this is false. -->
     <bool name="show_stats">false</bool>
 
+    <!-- A row above the dock from the Glance add-on (com.teddy.glance): what is playing, Continue watching from
+         the apps' Watch Next rows, and snow at the mountains it follows. Read from the add-on's local provider when
+         Home comes to the front and once a minute while it is in front; the launcher itself goes online for none of
+         it. Off by default; a theme can set "glance_row": true. Nothing is read while this is false. -->
+    <bool name="glance_row">false</bool>
+
     <!-- Time-of-day backdrop behind everything: a dark gradient that follows the clock, with a warm
          horizon glow around sunrise and sunset. 0 keeps the plain background (the default); 1 to 100
          sets its opacity. Around 60 reads clearly without hiding a wallpaper. Can also be set with

@@ -21,6 +21,8 @@
     <!-- YaOS (Yandex TV OS): HDMI, AV and the tuner all play in com.yandex.tv.live, whose activities require
          this permission (protection level normal, so it is granted at install). Ignored on other TVs. -->
     <uses-permission android:name="yandex.tv.permission.ACCESS_TV_SOURCE" />
+    <!-- glance_row: reads the Glance add-on's rows (a signature permission it defines; only a matching key gets it). -->
+    <uses-permission android:name="com.teddy.glance.permission.READ_ROWS" />
 
     <!-- Android 11+ package visibility: lets the launcher list the TV apps it shows as tiles, and the
          apps that declare a module card (docs/specs/card.md). -->
@@ -68,6 +70,9 @@
         <!-- Coocaa OS sources for the Inputs menu (coocaa_sources); see CoocaaSources. -->
         <provider android:authorities="com.skyworth.tv.provider" />
         <provider android:authorities="com.skyworth.tv.sdk.provider" />
+        <!-- glance_row: the Glance add-on's rows and the activity that opens them. -->
+        <provider android:authorities="com.teddy.glance.rows" />
+        <package android:name="com.teddy.glance" />
     </queries>
 
     <application

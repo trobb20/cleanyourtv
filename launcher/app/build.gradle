@@ -12,7 +12,21 @@ android {
         minSdk 26
         targetSdk 34
         versionCode 8
-        versionName '2.7'
+        versionName '2.7-glance'
+    }
+
+    signingConfigs {
+        // The key the TV's installed launcher was signed with, so pm install -r updates it in place:
+        // ORG_GRADLE_PROJECT_tvKeystore=~/.cleanyourtv/tv-launcher.keystore. Without it, the debug key as before.
+        tv {
+            def ks = providers.gradleProperty('tvKeystore').getOrNull()
+            if (ks != null) {
+                storeFile file(ks)
+                storePassword 'android'
+                keyAlias 'androiddebugkey'
+                keyPassword 'android'
+            }
+        }
     }
 
     buildTypes {
@@ -22,7 +36,7 @@ android {
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             // Sideloaded over ADB, never published: sign with the debug key so it installs over a debug build.
-            signingConfig signingConfigs.debug
+            signingConfig providers.gradleProperty('tvKeystore').present ? signingConfigs.tv : signingConfigs.debug
         }
     }
 
