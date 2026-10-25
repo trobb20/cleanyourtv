@@ -30,6 +30,27 @@ public class TokenRewriterTest {
     }
 
     @Test
+    public void sharedParametersAreLeftAloneUntilARenewalChangesThem() {
+        TokenRewriter r = new TokenRewriter();
+        r.reset(BASE + "index.m3u8?token=T&q=auto");
+        String segment = BASE + "seg_5.ts?token=T&q=720";
+        assertEquals(segment, r.rewrite(segment));
+        assertTrue(r.update(BASE + "index.m3u8?token=U&q=auto"));
+        assertEquals(BASE + "seg_5.ts?token=U&q=720", r.rewrite(segment));
+    }
+
+    @Test
+    public void anotherPlaylistsNewParametersAreNotARenewal() {
+        TokenRewriter r = new TokenRewriter();
+        r.reset(BASE + "master.m3u8?token=A");
+        assertFalse(r.update(BASE + "chunklist_720.m3u8?token=A&sid=9"));
+        assertTrue(r.update(BASE + "chunklist_720.m3u8?token=B&sid=9"));
+        assertFalse(r.update(BASE + "master.m3u8?token=B"));
+        assertEquals(1, r.generation());
+        assertEquals(BASE + "a.ts?token=B&sid=9", r.rewrite(BASE + "a.ts?token=A&sid=9"));
+    }
+
+    @Test
     public void otherHostsAreLeftAlone() {
         TokenRewriter r = new TokenRewriter();
         r.reset(BASE + "mono.m3u8?token=OLD");

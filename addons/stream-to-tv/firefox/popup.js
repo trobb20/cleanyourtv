@@ -1,6 +1,8 @@
 // Stream to TV popup: the streams the current tab has loaded, a Send button for each, and the live link.
 
 const $ = (id) => document.getElementById(id);
+// The last Send that failed, shown under its row until the next Send: {key, message}.
+let sendError = null;
 
 function ago(t) {
   const s = Math.round((Date.now() - t) / 1000);
@@ -77,15 +79,22 @@ async function render() {
     send.onclick = async () => {
       send.disabled = true;
       send.textContent = "Sending…";
+      sendError = null;
       try {
         await browser.runtime.sendMessage({ type: "send", tabId: tab.id, key: s.key, title: tab.title });
       } catch (e) {
-        alert(e.message);
+        sendError = { key: s.key, message: e.message };
       }
       render();
     };
     row.append(name, age, send);
     list.append(row);
+    if (sendError && sendError.key === s.key) {
+      const e = document.createElement("div");
+      e.className = "error";
+      e.textContent = sendError.message;
+      list.append(e);
+    }
   }
 }
 
@@ -93,5 +102,9 @@ $("settings").onclick = (e) => {
   e.preventDefault();
   browser.runtime.openOptionsPage();
 };
-render();
-setInterval(render, 3000);
+// Refresh while the popup is open, each time after the last refresh has finished.
+async function poll() {
+  await render().catch(() => {});
+  setTimeout(poll, 3000);
+}
+poll();

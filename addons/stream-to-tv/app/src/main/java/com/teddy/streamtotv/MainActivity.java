@@ -18,11 +18,13 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.annotation.OptIn;
+import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
+import androidx.media3.common.util.Util;
 import androidx.media3.datasource.DataSpec;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.datasource.HttpDataSource;
@@ -76,6 +78,9 @@ public class MainActivity extends Activity implements ControlServer.Handler {
     private volatile String title = "";
     private volatile String streamHost;
     private int failures;
+    /** Since the stream started: rebuffers while it was playing, and player errors. Shown in /status. */
+    private volatile int stalls, errors;
+    private final Runnable retryTask = this::retry;
 
     @Override
     protected void onCreate(Bundle saved) {
@@ -87,7 +92,6 @@ public class MainActivity extends Activity implements ControlServer.Handler {
         playerView = new PlayerView(this);
         playerView.setUseController(false);
         playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
-        playerView.setKeepScreenOn(true);
         root.addView(playerView, new FrameLayout.LayoutParams(-1, -1));
 
         panel = new LinearLayout(this);
@@ -179,17 +183,28 @@ public class MainActivity extends Activity implements ControlServer.Handler {
     }
 
     @Override
-    public JSONObject status() {
+    public JSONObject status(boolean full) {
         JSONObject o = new JSONObject();
         try {
             o.put("app", "stream-to-tv");
             o.put("state", state.name().toLowerCase(Locale.ROOT));
-            o.put("title", title);
-            o.put("host", streamHost == null ? JSONObject.NULL : streamHost);
             o.put("renewals", rewriter.generation());
+            o.put("stalls", stalls);
+            o.put("errors", errors);
+            if (full) {
+                o.put("title", title);
+                o.put("host", streamHost == null ? JSONObject.NULL : streamHost);
+            }
         } catch (JSONException ignored) {
         }
         return o;
+    }
+
+    @Override
+    public void serverFailed(String reason) {
+        main.post(() -> {
+            if (state == State.READY) show(State.READY, reason + "\nClose Stream to TV and open it again.");
+        });
     }
 
     // Playback, on the main thread.
@@ -200,6 +215,8 @@ public class MainActivity extends Activity implements ControlServer.Handler {
         streamHost = TokenRewriter.hostOf(url);
         rewriter.reset(url);
         failures = 0;
+        stalls = 0;
+        errors = 0;
 
         Map<String, String> sendHeaders = new LinkedHashMap<>();
         String userAgent = null;
@@ -209,7 +226,7 @@ public class MainActivity extends Activity implements ControlServer.Handler {
             else if (!SKIP_HEADERS.contains(k)) sendHeaders.put(e.getKey(), e.getValue());
         }
         DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-                .setUserAgent(userAgent != null ? userAgent : "Mozilla/5.0 (Android TV) StreamToTV/0.1")
+                .setUserAgent(userAgent != null ? userAgent : "Mozilla/5.0 (Android TV) StreamToTV/0.2")
                 .setDefaultRequestProperties(sendHeaders)
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(10_000)
@@ -230,6 +247,8 @@ public class MainActivity extends Activity implements ControlServer.Handler {
                     failures = 0;
                     show(State.PLAYING, "");
                 } else if (s == Player.STATE_BUFFERING && state == State.PLAYING) {
+                    stalls++;
+                    Log.i(TAG, "buffering, stall " + stalls);
                     flash("Buffering…");
                 }
             }
@@ -242,8 +261,7 @@ public class MainActivity extends Activity implements ControlServer.Handler {
         playerView.setPlayer(player);
 
         MediaItem.Builder item = new MediaItem.Builder().setUri(url);
-        String path = Uri.parse(url).getPath();
-        if (path != null && path.toLowerCase(Locale.ROOT).endsWith(".m3u8")) item.setMimeType(MimeTypes.APPLICATION_M3U8);
+        if (looksLikeHls(Uri.parse(url))) item.setMimeType(MimeTypes.APPLICATION_M3U8);
         player.setMediaItem(item.build());
         player.setPlayWhenReady(true);
         player.prepare();
@@ -251,23 +269,35 @@ public class MainActivity extends Activity implements ControlServer.Handler {
         Log.i(TAG, "playing " + streamHost + " with " + sendHeaders.keySet());
     }
 
+    /**
+     * HLS unless the URL says otherwise. The add-on sends only playlists, and some have no .m3u8 in the path (an
+     * ad-inserting proxy's), which ExoPlayer would otherwise take for a plain media file.
+     */
+    private static boolean looksLikeHls(Uri uri) {
+        int type = Util.inferContentType(uri);
+        if (type != C.CONTENT_TYPE_OTHER) return type == C.CONTENT_TYPE_HLS;
+        String last = uri.getLastPathSegment();
+        return last == null || !last.matches("(?i).*\\.(mp4|m4v|mkv|webm|mov|mp3|m4a|aac|ts)");
+    }
+
     private void handleError(PlaybackException error) {
         Log.w(TAG, "playback error " + error.getErrorCodeName(), error);
         if (player == null) return;
+        errors++;
         int http = httpStatus(error);
         if (http == 401 || http == 403 || http == 410) {
             // The site's token has expired. The laptop sends a fresh one as soon as its page gets it; retry
             // then, and every few seconds in case the refusal was a blip.
             show(State.WAITING_FOR_TOKEN, "The stream's token expired.\nWaiting for Firefox to send a fresh one…");
-            main.removeCallbacks(this::retry);
-            main.postDelayed(this::retry, TOKEN_WAIT_RETRY_MS);
+            main.removeCallbacks(retryTask);
+            main.postDelayed(retryTask, TOKEN_WAIT_RETRY_MS);
             return;
         }
         failures++;
         long delay = Math.min(RETRY_MS * failures, 15_000);
         show(State.RETRYING, "Connection problem (" + error.getErrorCodeName() + ").\nTrying again…");
-        main.removeCallbacks(this::retry);
-        main.postDelayed(this::retry, delay);
+        main.removeCallbacks(retryTask);
+        main.postDelayed(retryTask, delay);
     }
 
     private static int httpStatus(Throwable t) {
@@ -280,7 +310,7 @@ public class MainActivity extends Activity implements ControlServer.Handler {
     }
 
     private void retry() {
-        main.removeCallbacks(this::retry);
+        main.removeCallbacks(retryTask);
         if (player == null) return;
         // A live stream resumes at the live edge rather than where it stopped.
         player.seekToDefaultPosition();
@@ -296,7 +326,7 @@ public class MainActivity extends Activity implements ControlServer.Handler {
     }
 
     private void releasePlayer() {
-        main.removeCallbacks(this::retry);
+        main.removeCallbacks(retryTask);
         if (player != null) {
             playerView.setPlayer(null);
             player.release();
@@ -309,7 +339,7 @@ public class MainActivity extends Activity implements ControlServer.Handler {
         boolean video = s == State.PLAYING;
         panel.setVisibility(video ? View.GONE : View.VISIBLE);
         status.setText(message);
-        getWindow().getDecorView().setKeepScreenOn(s != State.READY);
+        // The screen may sleep on the idle screen; while a stream loads, plays or waits for a token it stays on.
         if (s != State.READY) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }

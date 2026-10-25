@@ -1,13 +1,16 @@
 package com.teddy.streamtotv;
 
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Keeps a live stream going across token renewals. Stream sites put a short-lived token in the query of the
  * playlist URL and of every segment URL the playlist lists (?token=..., ?wmsAuthSign=..., ?e=...&st=...). When
- * the page in the laptop's browser fetches the playlist with a new token, the laptop sends that URL here, and
- * every later request to the same host gets the new values for the query parameters it already carries.
+ * the page in the laptop's browser fetches a playlist with a new token, the laptop sends that URL here, and
+ * every later request to the same host gets the new values for the renewed parameters it already carries.
+ * Only parameters whose value a renewal changed are rewritten: a shared ?q=auto or ?id= is left alone.
  * Parameters the request does not have are never added, and other hosts are left alone.
  *
  * Plain Java on strings, so the JVM tests can run it without Android.
@@ -15,26 +18,36 @@ import java.util.Map;
 final class TokenRewriter {
     private String host;
     private Map<String, String> latest = new LinkedHashMap<>();
+    private final Set<String> renewed = new HashSet<>();
     private int generation;
 
     /** Starts over with the URL the laptop sent for a new stream. */
     synchronized void reset(String url) {
         host = hostOf(url);
         latest = params(url);
+        renewed.clear();
         generation = 0;
     }
 
     /**
-     * Takes the parameters of a renewed playlist URL. Returns false (and changes nothing) for another host or a
-     * URL with no query, or when the values are the ones already held.
+     * Takes the parameters of a renewed playlist URL from the same host. Returns true when a parameter already
+     * held got a new value; parameters seen for the first time (another playlist's) are only remembered. Another
+     * host or a URL with no query changes nothing.
      */
     synchronized boolean update(String url) {
         String h = hostOf(url);
         Map<String, String> p = params(url);
-        if (h == null || !h.equals(host) || p.isEmpty() || p.equals(latest)) return false;
-        latest = p;
-        generation++;
-        return true;
+        if (h == null || !h.equals(host) || p.isEmpty()) return false;
+        boolean changed = false;
+        for (Map.Entry<String, String> e : p.entrySet()) {
+            String before = latest.put(e.getKey(), e.getValue());
+            if (before != null && !before.equals(e.getValue())) {
+                renewed.add(e.getKey());
+                changed = true;
+            }
+        }
+        if (changed) generation++;
+        return changed;
     }
 
     /** How many renewals have arrived since the stream started. */
@@ -42,9 +55,9 @@ final class TokenRewriter {
         return generation;
     }
 
-    /** The URL with each parameter it already carries set to the newest value, for requests to the stream's host. */
+    /** The URL with each renewed parameter it carries set to the newest value, for requests to the stream's host. */
     synchronized String rewrite(String url) {
-        if (host == null || latest.isEmpty() || !host.equals(hostOf(url))) return url;
+        if (host == null || renewed.isEmpty() || !host.equals(hostOf(url))) return url;
         int q = url.indexOf('?');
         if (q < 0) return url;
         int hash = url.indexOf('#', q);
@@ -57,7 +70,7 @@ final class TokenRewriter {
             String pair = pairs[i];
             int eq = pair.indexOf('=');
             String key = eq < 0 ? pair : pair.substring(0, eq);
-            String value = latest.get(key);
+            String value = renewed.contains(key) ? latest.get(key) : null;
             if (eq >= 0 && value != null && !value.equals(pair.substring(eq + 1))) {
                 out.append(key).append('=').append(value);
                 changed = true;
